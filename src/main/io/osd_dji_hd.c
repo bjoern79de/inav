@@ -258,33 +258,15 @@ static uint16_t osdConvertRSSI(void)
 
 static void osdUpdateStats(void)
 {
-    int16_t value;
-
     if (feature(FEATURE_GPS)) {
-        value = osdGet3DSpeed();
-        if (stats.max_speed < value)
-            stats.max_speed = value;
-
-        if (stats.max_distance < GPS_distanceToHome)
-            stats.max_distance = GPS_distanceToHome;
+        stats.max_speed = MAX(stats.max_speed, osdGet3DSpeed());
+        stats.max_distance = MAX(stats.max_distance, GPS_distanceToHome);
     }
 
-    value = getBatteryVoltage();
-    if (stats.min_voltage > value)
-        stats.min_voltage = value;
-
-    value = abs(getAmperage() / 100);
-    if (stats.max_current < value)
-        stats.max_current = value;
-
-    value = abs(getPower() / 100);
-    if (stats.max_power < value)
-        stats.max_power = value;
-
-    value = osdConvertRSSI();
-    if (stats.min_rssi > value)
-        stats.min_rssi = value;
-
+    stats.min_voltage = MIN(stats.min_voltage, getBatteryVoltage());
+    stats.max_current = MAX(stats.max_current, abs(getAmperage() / 100));
+    stats.max_power = MAX(stats.max_power, abs(getPower() / 100));
+    stats.min_rssi = MIN(stats.min_rssi, osdConvertRSSI());
     stats.max_altitude = MAX(stats.max_altitude, osdGetAltitude());
 }
 
@@ -798,11 +780,6 @@ static void showWarningsAndOther(sbuf_t *dst, const char * name) {
     const char *message = " ";
     const char *enabledElements = name + 1;
     char djibuf[24];
-    // clear name from chars : and leading W
-    if(enabledElements[0] == 'W'){
-        enabledElements += 1;
-    }
-
     int elemLen = strlen(enabledElements);
 
     if(elemLen > 0){
@@ -820,7 +797,33 @@ static void showWarningsAndOther(sbuf_t *dst, const char * name) {
                 osdDJIFormatDistanceStr( djibuf, getTotalTravelDistance());
                 break;
             case 'W':
-                tfp_sprintf(djibuf, "%s", "MAKE_W_FIRST");
+                {
+                    const char* messages[5];
+                    unsigned messageCount = 0;
+
+                    if (FLIGHT_MODE(NAV_ALTHOLD_MODE) && !navigationRequiresAngleMode()) {
+                        // ALTHOLD might be enabled alongside ANGLE/HORIZON/ACRO
+                        // when it doesn't require ANGLE mode (required only in FW
+                        // right now). If if requires ANGLE, its display is handled
+                        // by OSD_FLYMODE.
+                        messages[messageCount++] = "(ALT HOLD)";
+                    }
+                    if (IS_RC_MODE_ACTIVE(BOXAUTOTRIM)) {
+                        messages[messageCount++] = "(AUTOTRIM)";
+                    }
+                    if (IS_RC_MODE_ACTIVE(BOXAUTOTUNE)) {
+                        messages[messageCount++] = "(AUTOTUNE)";
+                    }
+                    if (FLIGHT_MODE(HEADFREE_MODE)) {
+                        messages[messageCount++] = "(HEADFREE)";
+                    }
+
+                    if (messageCount > 0) {
+                        tfp_sprintf(djibuf, "%s", (char *)messages[OSD_ALTERNATING_CHOICES((int)(3000 / messageCount), messageCount)]);
+                    } else {
+                        tfp_sprintf(djibuf, " ");
+                    }
+                }
                 break;
             default:
                 tfp_sprintf(djibuf, "%s", "UNKOWN_ELEM");
@@ -832,7 +835,7 @@ static void showWarningsAndOther(sbuf_t *dst, const char * name) {
         }
     }
 
-    if (name[1] == 'W' ){
+    if (name[1] == 'W' ) {
         char messageBuf[MAX(SETTING_MAX_NAME_LENGTH, OSD_MESSAGE_LENGTH+1)];
         if (ARMING_FLAG(ARMED)) {
             // Aircraft is armed. We might have up to 5
@@ -874,24 +877,7 @@ static void showWarningsAndOther(sbuf_t *dst, const char * name) {
                         messages[messageCount++] = navStateMessage;
                     }
                 } else if (STATE(FIXED_WING_LEGACY) && (navGetCurrentStateFlags() & NAV_CTL_LAUNCH)) {
-                        messages[messageCount++] = "AUTOLAUNCH";
-                } else {
-                    if (FLIGHT_MODE(NAV_ALTHOLD_MODE) && !navigationRequiresAngleMode()) {
-                        // ALTHOLD might be enabled alongside ANGLE/HORIZON/ACRO
-                        // when it doesn't require ANGLE mode (required only in FW
-                        // right now). If if requires ANGLE, its display is handled
-                        // by OSD_FLYMODE.
-                        messages[messageCount++] = "(ALT HOLD)";
-                    }
-                    if (IS_RC_MODE_ACTIVE(BOXAUTOTRIM)) {
-                        messages[messageCount++] = "(AUTOTRIM)";
-                    }
-                    if (IS_RC_MODE_ACTIVE(BOXAUTOTUNE)) {
-                        messages[messageCount++] = "(AUTOTUNE)";
-                    }
-                    if (FLIGHT_MODE(HEADFREE_MODE)) {
-                        messages[messageCount++] = "(HEADFREE)";
-                    }
+                    messages[messageCount++] = "AUTOLAUNCH";
                 }
                 // Pick one of the available messages. Each message lasts
                 // a second.
@@ -954,8 +940,8 @@ static void showStats(sbuf_t *dst) {
                     case OSD_UNIT_IMPERIAL:
                         value = CENTIMETERS_TO_FEET(stats.max_distance);
                         if (value > 5280) {
-                            tfp_sprintf(message, "MDST: %d.%01d%s", (int)(value / 1000),
-                                (abs(value) % 1000), "M");
+                            tfp_sprintf(message, "MDST: %d.%02d%s", (int)(value / 5280),
+                                (int)((value % 5280) / 10), "M");
                         } else {
                             tfp_sprintf(message, "MDST: %luFT", value);
                         }
@@ -965,10 +951,10 @@ static void showStats(sbuf_t *dst) {
                     case OSD_UNIT_METRIC:
                         value = CENTIMETERS_TO_METERS(stats.max_distance);
                         if (value > 999) {
-                            tfp_sprintf(message, "MDST: %d.%01d%s", (int)(value / 1000),
-                                (abs(value) % 1000), "KM");
+                            tfp_sprintf(message, "MDST: %d.%02d%s", (int)(value / 1000),
+                                (int)((value % 1000) / 10), "KM");
                         } else {
-                            tfp_sprintf(message, "MDST: %luM", value);
+                            tfp_sprintf(message, "MDST: %lum", value);
                         }
                         break;
                 }
@@ -981,8 +967,8 @@ static void showStats(sbuf_t *dst) {
                     case OSD_UNIT_IMPERIAL:
                         value = CENTIMETERS_TO_FEET(totalDistance);
                         if (value > 5280) {
-                            tfp_sprintf(message, "TDST: %d.%01d%s", (int)(value / 1000),
-                                (abs(value) % 1000), "M");
+                            tfp_sprintf(message, "TDST: %d.%02d%s", (int)(value / 5280),
+                                (int)((value % 5280) / 10), "M");
                         } else {
                             tfp_sprintf(message, "TDST: %luFT", value);
                         }
@@ -992,10 +978,10 @@ static void showStats(sbuf_t *dst) {
                     case OSD_UNIT_METRIC:
                         value = CENTIMETERS_TO_METERS(totalDistance);
                         if (value > 999) {
-                            tfp_sprintf(message, "TDST: %d.%01d%s", (int)(value / 1000),
-                                (abs(value) % 1000), "KM");
+                            tfp_sprintf(message, "TDST: %d.%02d%s", (int)(value / 1000),
+                                (int)((value % 1000) / 10), "KM");
                         } else {
-                            tfp_sprintf(message, "TDST: %luM", value);
+                            tfp_sprintf(message, "TDST: %lum", value);
                         }
                         break;
                 }
@@ -1008,8 +994,8 @@ static void showStats(sbuf_t *dst) {
                     case OSD_UNIT_IMPERIAL:
                         value = CENTIMETERS_TO_FEET(stats.max_altitude);
                         if (value > 5280) {
-                            tfp_sprintf(message, "MALT: %d.%01d%s", (int)(value / 1000),
-                                (abs(value) % 1000), "M");
+                            tfp_sprintf(message, "MALT: %d.%02d%s", (int)(value / 5280),
+                                (int)((value % 5280) / 100), "M");
                         } else {
                             tfp_sprintf(message, "MALT: %luFT", value);
                         }
@@ -1019,10 +1005,10 @@ static void showStats(sbuf_t *dst) {
                     case OSD_UNIT_METRIC:
                         value = CENTIMETERS_TO_METERS(stats.max_altitude);
                         if (value > 999) {
-                            tfp_sprintf(message, "MALT: %d.%01d%s", (int)(value / 1000),
-                                (abs(value) % 1000), "KM");
+                            tfp_sprintf(message, "MALT: %d.%02d%s", (int)(value / 1000),
+                                (int)((value % 1000) / 10), "KM");
                         } else {
-                            tfp_sprintf(message, "MALT: %luM", value);
+                            tfp_sprintf(message, "MALT: %lum", value);
                         }
                         break;
                 }
@@ -1031,7 +1017,7 @@ static void showStats(sbuf_t *dst) {
         case 5:
             {
                 tfp_sprintf(message, "MBAT: %d.%02d%s", (int)(stats.min_voltage / 100),
-                    (abs(stats.min_voltage) % 100), "V");
+                    (stats.min_voltage % 100), "V");
             }
             break;
         case 6:
